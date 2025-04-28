@@ -1,0 +1,135 @@
+---
+title: "Test error for linear and knn classification"
+output: html_notebook
+---
+
+### Reference: ESL section 2.3.3 (from least squares to nearest neighbours), p16-17
+
+We reproduce the misclassification curves for the simulation example described.
+
+```{r}
+# Useful libraries
+library(dplyr)
+library(ggplot2)
+library(class) # for knn
+library(mvtnorm) # for multivariate Gaussian
+library(modelr) # for add_predictions
+
+# Set seed for reproducibility
+#set.seed(42)
+```
+
+### Generating data
+
+```{r}
+# Function for generating data described in section 2.3.3
+n_means <- 10
+blue_means <- rmvnorm(n_means, mean = c(1, 0), sigma = diag(2))
+orange_means <- rmvnorm(n_means, mean = c(0, 1), sigma = diag(2))
+
+generate_data <- function(n) {
+  # generate blue data
+  blue_data <- data.frame(x = numeric(n), y = numeric(n))
+  for (i in 1:n) {
+    blue_index <- sample(1:10, size = 1)
+    blue_mean <- blue_means[blue_index, ]
+    blue_data[i, ] <- rmvnorm(1, mean = blue_mean, sigma = diag(0.2, 2))
+  }
+  blue_data <- blue_data %>% mutate(label = rep(0, n))
+
+  # generate orange data
+  orange_data <- data.frame(x = numeric(n), y = numeric(n))
+  for (i in 1:n) {
+    orange_index <- sample(1:10, size = 1)
+    orange_mean <- orange_means[orange_index, ]
+    orange_data[i, ] <- rmvnorm(1, mean = orange_mean, sigma = diag(0.2, 2))
+  }
+  orange_data <- orange_data %>% mutate(label = rep(1, n))
+
+  # return combined data
+  return(rbind(blue_data, orange_data))
+}
+```
+
+```{r}
+# Generate training data
+training_data <- generate_data(100)
+
+# Plot the training data
+ggplot(training_data, aes(x = x, y = y, color = factor(label))) +
+  geom_point() +
+  scale_color_manual(values = c("0" = "blue", "1" = "orange"))
+```
+
+```{r}
+# Generate testing data
+testing_data <- generate_data(5000)
+
+# Plot the testing data
+ggplot(testing_data, aes(x = x, y = y, color = factor(label))) +
+  geom_point() +
+  scale_color_manual(values = c("0" = "blue", "1" = "orange"))
+```
+
+### Training and testing
+
+```{r}
+# -- Linear model -- 
+linear_model <- lm(label ~ x + y, training_data)
+
+# add predictions to the testing and training data
+linear_predict_test <- testing_data %>% add_predictions(linear_model) 
+linear_predict_test$pred[linear_predict_test$pred < 0.5] <- 0
+linear_predict_test$pred[linear_predict_test$pred >= 0.5] <- 1
+
+linear_predict_train <- training_data %>% add_predictions(linear_model) 
+linear_predict_train$pred[linear_predict_train$pred < 0.5] <- 0
+linear_predict_train$pred[linear_predict_train$pred >= 0.5] <- 1
+
+# calculate error rates
+linear_test_errors <- linear_predict_test %>% filter(label != pred) %>% nrow()
+linear_test_error_rate <- linear_test_errors / 10000
+linear_train_errors <- linear_predict_train %>% filter(label != pred) %>% nrow()
+linear_train_error_rate <- linear_train_errors / 10000
+
+
+# -- KNN model --
+k_value_range <- 160
+
+# function for adding predictions to data
+knn_error_rate <- function(data, k_value) {
+  data_pred <- data %>% mutate(pred = knn(train = training_data[, c("x", "y")], test = data[, c("x", "y")], cl = training_data$label, k= k_value))
+  n_errors <- data_pred %>% filter(label != pred) %>% nrow()
+  return(n_errors / nrow(data))
+}
+
+# calculate error rates
+knn_test_error_rate <- numeric(k_value_range)
+for (k in 1:k_value_range) {
+  knn_test_error_rate[k] <- knn_error_rate(testing_data, k)
+}
+
+knn_train_error_rate <- numeric(k_value_range)
+for (k in 1:k_value_range) {
+  knn_train_error_rate[k] <- knn_error_rate(training_data, k)
+}
+
+df_error <- data.frame(k = 1:160)
+df_error$dof <- 200 / df_error$k
+df_error$test_error_rate <- knn_test_error_rate
+df_error$train_error_rate <- knn_train_error_rate
+
+df_error
+
+```
+
+### Graphing the error rates
+
+```{r}
+ggplot(df_error, aes(x=dof, y=test_error_rate)) +
+  geom_point(color = "red") +
+  geom_line() +
+  geom_point(aes(y=train_error_rate), color = "blue") +
+  geom_line(aes(y=train_error_rate))
+  
+```
